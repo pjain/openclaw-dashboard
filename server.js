@@ -16,6 +16,13 @@ const memoryDir = path.join(WORKSPACE_DIR, 'memory');
 const memoryMdPath = path.join(WORKSPACE_DIR, 'MEMORY.md');
 const heartbeatPath = path.join(WORKSPACE_DIR, 'HEARTBEAT.md');
 const healthHistoryFile = path.join(dataDir, 'health-history.json');
+
+const skillsDir = path.join(WORKSPACE_DIR, 'skills');
+const configFiles = [
+  { name: 'openclaw-gateway.service', path: path.join(os.homedir(), '.config/systemd/user/openclaw-gateway.service') },
+  { name: 'openclaw-config.json',     path: path.join(os.homedir(), '.openclaw/config.json') },
+];
+const workspaceFilenames = ['AGENTS.md','HEARTBEAT.md','IDENTITY.md','MEMORY.md','SOUL.md','TOOLS.md','USER.md'];
 const claudeUsageFile = path.join(dataDir, 'claude-usage.json');
 const scrapeScript = path.join(WORKSPACE_DIR, 'scripts', 'scrape-claude-usage.sh');
 
@@ -830,6 +837,78 @@ function getMemoryFiles() {
   return files;
 }
 
+const MAX_FILE_BODY = 1024 * 1024; // 1MB max POST body
+const READ_ONLY_FILES = new Set(['openclaw-gateway.service', 'openclaw-config.json']);
+
+function getKeyFiles() {
+  const files = [];
+  for (const fname of workspaceFilenames) {
+    const fpath = path.join(WORKSPACE_DIR, fname);
+    try {
+      if (fs.existsSync(fpath)) {
+        const stat = fs.statSync(fpath);
+        files.push({ name: fname, modified: stat.mtimeMs, size: stat.size, editable: true });
+      }
+    } catch {}
+  }
+  try {
+    if (fs.existsSync(skillsDir)) {
+      const entries = fs.readdirSync(skillsDir).sort();
+      for (const e of entries) {
+        const entryPath = path.join(skillsDir, e);
+        try {
+          const stat = fs.statSync(entryPath);
+          if (stat.isDirectory()) {
+            const skillMd = path.join(entryPath, 'SKILL.md');
+            if (fs.existsSync(skillMd)) {
+              const fstat = fs.statSync(skillMd);
+              files.push({ name: 'skills/' + e + '/SKILL.md', modified: fstat.mtimeMs, size: fstat.size, editable: true });
+            }
+          } else if (e.endsWith('.md')) {
+            files.push({ name: 'skills/' + e, modified: stat.mtimeMs, size: stat.size, editable: true });
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+  for (const cf of configFiles) {
+    try {
+      if (fs.existsSync(cf.path)) {
+        const stat = fs.statSync(cf.path);
+        files.push({ name: cf.name, modified: stat.mtimeMs, size: stat.size, editable: !READ_ONLY_FILES.has(cf.name) });
+      }
+    } catch {}
+  }
+  return files;
+}
+
+// Build whitelist map: logical name -> absolute path (internal only, never exposed)
+function buildKeyFilesAllowed() {
+  const map = {};
+  for (const fname of workspaceFilenames) {
+    const fpath = path.join(WORKSPACE_DIR, fname);
+    if (fs.existsSync(fpath)) map[fname] = fpath;
+  }
+  try {
+    if (fs.existsSync(skillsDir)) {
+      for (const e of fs.readdirSync(skillsDir).sort()) {
+        const ep = path.join(skillsDir, e);
+        const stat = fs.statSync(ep);
+        if (stat.isDirectory()) {
+          const sm = path.join(ep, 'SKILL.md');
+          if (fs.existsSync(sm)) map['skills/' + e + '/SKILL.md'] = sm;
+        } else if (e.endsWith('.md')) {
+          map['skills/' + e] = ep;
+        }
+      }
+    }
+  } catch {}
+  for (const cf of configFiles) {
+    if (fs.existsSync(cf.path)) map[cf.name] = cf.path;
+  }
+  return map;
+}
+
 function getTodayTokens() {
   try {
     const files = fs.readdirSync(sessDir).filter(f => f.endsWith('.jsonl'));
@@ -1312,6 +1391,86 @@ const server = http.createServer((req, res) => {
       res.writeHead(400, { 'Content-Type': 'text/plain' });
       res.end('Bad request');
     }
+    return;
+  }
+  if (req.url === '/api/key-files') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify(getKeyFiles()));
+    return;
+  }
+  if (req.url.startsWith('/api/key-file') && req.method === 'GET') {
+    try {
+      const params = new URL(req.url, 'http://localhost').searchParams;
+      const name = params.get('path') || '';
+      const allowed = buildKeyFilesAllowed();
+      if (!allowed[name]) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
+        res.end('Forbidden');
+        return;
+      }
+      const fpath = allowed[name];
+      if (!fs.existsSync(fpath)) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('File not found');
+        return;
+      }
+      const content = fs.readFileSync(fpath, 'utf8');
+      res.writeHead(200, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' });
+      res.end(content);
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'text/plain' });
+      res.end('Bad request');
+    }
+    return;
+  }
+  if (req.url === '/api/key-file' && req.method === 'POST') {
+    let body = '';
+    let overflow = false;
+    req.on('data', chunk => {
+      body += chunk;
+      if (body.length > MAX_FILE_BODY) { overflow = true; req.destroy(); }
+    });
+    req.on('end', () => {
+      if (overflow) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Payload too large (max 1MB)' }));
+        return;
+      }
+      try {
+        const { path: name, content } = JSON.parse(body);
+        if (typeof name !== 'string' || typeof content !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid request body' }));
+          return;
+        }
+        if (READ_ONLY_FILES.has(name)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'File is read-only' }));
+          return;
+        }
+        const allowed = buildKeyFilesAllowed();
+        if (!allowed[name]) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Forbidden' }));
+          return;
+        }
+        const fpath = allowed[name];
+        // Backup existing file before overwrite
+        try {
+          if (fs.existsSync(fpath)) {
+            fs.copyFileSync(fpath, fpath + '.bak');
+          }
+        } catch {}
+        const tmp = fpath + '.tmp.' + Date.now();
+        fs.writeFileSync(tmp, content, 'utf8');
+        fs.renameSync(tmp, fpath);
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
     return;
   }
   if (req.url.startsWith('/api/cron/') && req.method === 'POST') {
