@@ -1,197 +1,112 @@
-# OpenClaw Dashboard v1.0.0 - Release Notes
+# OpenClaw Dashboard v2.0.0 - Release Notes
 
-## 🎉 Initial Public Release
+## 🔐 Authentication & Security Hardening
 
-The OpenClaw Agent Dashboard is now ready for public use on GitHub!
+Major security release — the dashboard now requires authentication and includes enterprise-grade security features.
 
 **Repository:** https://github.com/tugcantopaloglu/openclaw-dashboard
 
 ---
 
-## ✅ Changes for Public Release
+## 🆕 New Features
 
-### 1. **Configuration via Environment Variables**
+### 🔑 Username/Password Authentication
+- First visit shows a registration screen to create your account
+- Passwords hashed with PBKDF2 (100,000 iterations, SHA-512, random salt)
+- Server-side session tokens — passwords never stored in browser
+- "Remember me" option: 3-hour persistent session vs browser-session only
+- Credentials stored in `data/credentials.json`
 
-All hardcoded paths have been replaced with environment variables:
+### 🛡️ Multi-Factor Authentication (TOTP)
+- Optional MFA with any TOTP app (Google Authenticator, Authy, etc.)
+- QR code scanning for easy setup
+- 6-digit codes with ±1 window tolerance for clock drift
+- TOTP verification required before MFA is activated
+- Enable/disable from the Security page in dashboard
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
+### 🔒 Password Recovery
+- "Forgot password?" flow using recovery token (`DASHBOARD_TOKEN` env var)
+- Change password from Security page (invalidates other sessions)
+- Complete account reset via SSH if needed
+
+### 🌐 HTTPS Enforcement
+- HTTP blocked for non-localhost connections
+- Localhost access allowed for local development
+- `DASHBOARD_ALLOW_HTTP=true` env var to override
+- Works seamlessly with Tailscale HTTPS proxy
+
+## 🛡️ Security Hardening
+
+### Critical Fixes
+- **Timing-safe token comparison** — `crypto.timingSafeEqual` prevents timing attacks
+- **IP spoofing protection** — only `req.socket.remoteAddress` used (no X-Forwarded-For trust)
+- **No token leakage** — login response doesn't expose sensitive data
+
+### Security Headers (all responses)
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains`
+- `Content-Security-Policy` with explicit directives
+- `X-Frame-Options: DENY`
+- `X-Content-Type-Options: nosniff`
+- `X-XSS-Protection: 1; mode=block`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+
+### Rate Limiting
+- Unified rate limiter for login attempts only
+- 5 failed attempts → 15-minute soft lockout
+- 20 failed attempts → 15-minute hard lockout
+- Lockout calculated from last failed attempt
+
+### Other
+- **CORS** — same-origin only, no wildcard
+- **OPTIONS preflight** handling (204 response)
+- **Audit logging** — all auth events and destructive actions logged to `data/audit.log` (auto-rotates at 10MB)
+- **Atomic log rotation** — uses tmp file + rename
+- **Scoped tmux kill** — only kills claude-persistent session, not all tmux
+- **CSP documented** — `unsafe-inline` explained as necessary for single-file architecture
+
+## 🔧 Infrastructure
+
+### Reverse Proxy Support
+- Automatic API base path detection for subpath deployments (e.g., `/dashboard`)
+- Works with Tailscale serve, nginx, and other reverse proxies
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `DASHBOARD_PORT` | `7000` | Server port |
-| `WORKSPACE_DIR` | `$OPENCLAW_WORKSPACE` or `$(pwd)` | OpenClaw workspace path |
-| `OPENCLAW_DIR` | `$HOME/.openclaw` | OpenClaw data directory |
-| `OPENCLAW_AGENT` | `main` | Agent ID to monitor |
+| `DASHBOARD_TOKEN` | Auto-generated | Recovery token for password reset |
+| `WORKSPACE_DIR` | `~/clawd` | OpenClaw workspace path |
+| `OPENCLAW_DIR` | `~/.openclaw` | OpenClaw config directory |
+| `DASHBOARD_ALLOW_HTTP` | `false` | Allow HTTP from non-local IPs |
 
-**Example:**
-```bash
-WORKSPACE_DIR=/my/workspace DASHBOARD_PORT=8080 node server.js
-```
+### install.sh Updates
+- Token setup during installation (custom or auto-generated)
+- Token saved to systemd service environment
+- Displays login instructions after install
 
-### 2. **Auto-Detection of Git Repositories**
+## 📝 Documentation
+- Comprehensive README with MFA guide, password recovery, and troubleshooting
+- Security features documented in detail
+- API reference for authenticated vs unauthenticated endpoints
 
-The dashboard now automatically discovers git repos by scanning `$WORKSPACE_DIR/projects/` for directories containing `.git`:
+## ⬆️ Upgrade from v1.x
 
-```javascript
-function getGitRepos() {
-  const repos = [];
-  const projDir = path.join(WORKSPACE_DIR, 'projects');
-  // Scans for .git directories...
-  return repos;
-}
-```
+1. Pull latest: `git pull origin main`
+2. Restart service: `systemctl restart agent-dashboard`
+3. First visit will show registration screen — create your account
+4. (Optional) Enable MFA from Security page
+5. Share recovery token with yourself (check `journalctl -u agent-dashboard`)
 
-### 3. **Branding Updates**
-
-- Removed "Clara" references throughout
-- Updated to generic "Agent Dashboard" branding
-- Added `/api/config` endpoint for dashboard metadata
-- Browser notifications now say "Agent Dashboard"
-
-### 4. **Comprehensive Documentation**
-
-Created extensive README.md with:
-- 20+ feature highlights
-- Quick install guide
-- Manual installation steps
-- Environment variable documentation
-- Systemd service template
-- Complete API reference
-- Keyboard shortcuts table
-- Contributing guidelines
-
-### 5. **Installation Script**
-
-New `install.sh` script that:
-- Checks for Node.js v18+
-- Detects workspace automatically
-- Creates systemd service
-- Enables auto-start on boot
-- Provides useful commands
-
-**Usage:**
-```bash
-./install.sh
-```
-
-### 6. **Git Configuration**
-
-Added `.gitignore` to exclude:
-- `node_modules/`
-- `data/` (health history, usage data)
-- Private memory files
-- Environment files
-- Log files
-
-### 7. **Updated Scraper Script**
-
-`scrape-claude-usage.sh` now uses `$WORKSPACE_DIR` instead of hardcoded `/root/clawd`:
-
-```bash
-WORKSPACE_DIR="${WORKSPACE_DIR:-${OPENCLAW_WORKSPACE:-$(pwd)}}"
-OUTPUT_FILE="${WORKSPACE_DIR}/data/claude-usage.json"
-```
+**Breaking changes:**
+- Authentication is now required for all API endpoints
+- Old bookmarks to dashboard will show login screen
+- `DASHBOARD_TOKEN` env var is now used as recovery key (not login token)
 
 ---
 
-## 📦 What's Included
+*Previous: [v1.0.0 — Initial Public Release](#v100)*
 
-### Core Files
+# OpenClaw Dashboard v1.0.0
 
-- `server.js` - Main dashboard server (Node.js)
-- `index.html` - Frontend UI (pure HTML/CSS/JS)
-- `README.md` - Comprehensive documentation
-- `install.sh` - Automated installer
-- `.gitignore` - Git exclusions
-
-### Documentation
-
-- `FEATURES.md` - Feature list
-- `IMPLEMENTATION_COMPLETE.md` - Implementation notes
-- `VERIFICATION.md` - Testing checklist
-- `RELEASE_NOTES.md` - This file
-
----
-
-## 🚀 Getting Started
-
-### Quick Start
-
-```bash
-git clone https://github.com/tugcantopaloglu/openclaw-dashboard.git
-cd openclaw-dashboard
-export WORKSPACE_DIR=/path/to/your/workspace
-node server.js
-```
-
-Visit http://localhost:7000
-
-### Automated Install
-
-```bash
-git clone https://github.com/tugcantopaloglu/openclaw-dashboard.git
-cd openclaw-dashboard
-./install.sh
-```
-
----
-
-## 🔒 Security & Privacy
-
-- **No API keys** are included in the repo
-- **No private data** (memory files, session data) is committed
-- `data/` directory is gitignored
-- All sensitive paths are configurable via environment variables
-
----
-
-## ✅ Verification
-
-### Dashboard Status
-```bash
-systemctl status agent-dashboard
-```
-
-### API Test
-```bash
-curl http://localhost:7000/api/config
-```
-
-Expected response:
-```json
-{
-  "name": "OpenClaw Dashboard",
-  "version": "1.0.0"
-}
-```
-
-### Environment Variables in Use
-```bash
-journalctl -u agent-dashboard | grep Environment
-```
-
----
-
-## 🎯 Next Steps
-
-1. ⭐ Star the repo: https://github.com/tugcantopaloglu/openclaw-dashboard
-2. 📖 Read the full README for API docs and features
-3. 🐛 Report issues on GitHub
-4. 🤝 Contribute improvements via PRs
-
----
-
-## 📝 Commit
-
-**Commit Hash:** 169bec7  
-**Message:** Initial release: OpenClaw Agent Dashboard v1.0.0  
-**Date:** 2026-02-10  
-**Author:** Tuğcan Topaloğlu <topaloglutugcan@gmail.com>
-
----
-
-## 🙏 Acknowledgments
-
-Built with ✨ for the OpenClaw community.
-
-**Repository:** https://github.com/tugcantopaloglu/openclaw-dashboard  
-**License:** MIT  
-**Author:** Tuğcan Topaloğlu
+Initial public release with session management, cost analysis, live feed, memory viewer, system health monitoring, and more. See git history for details.
