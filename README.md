@@ -15,6 +15,7 @@ A beautiful, real-time monitoring dashboard for OpenClaw agents. Track sessions,
 - 💰 **Cost Analysis** - Detailed spending breakdowns by model, session, and time period
 - ⚡ **Live Feed** - Real-time stream of agent messages across all sessions
 - 🧠 **Memory Viewer** - Browse and read agent memory files (MEMORY.md, HEARTBEAT.md, daily notes)
+- 📁 **Files Manager** - View and edit workspace files, skills, and configs with security hardening
 - 📈 **System Health** - CPU, RAM, disk, temperature monitoring with sparklines
 - 🔄 **Service Control** - Quick actions to restart OpenClaw, dashboard, or other services
 - 📋 **Log Viewer** - Real-time system logs with auto-refresh
@@ -34,6 +35,7 @@ A beautiful, real-time monitoring dashboard for OpenClaw agents. Track sessions,
 - 🌟 **Lifetime Stats** - Total tokens, messages, cost since first session
 - 📈 **Health History** - 24-hour CPU & RAM sparklines
 - 🎯 **Quick Actions** - One-click system maintenance (updates, cleanup, restarts)
+- 🍎 **macOS Compatible** - Full support for macOS system stats, services, and memory reporting
 - 🔐 **No External Dependencies** - Pure Node.js, no database required
 
 ## 🚀 Quick Install
@@ -341,6 +343,17 @@ List all memory files with metadata.
 #### `GET /api/memory-file?path=<path>`
 Read content of a memory file.
 
+#### `GET /api/key-files`
+List workspace files (AGENTS.md, SOUL.md, skills, configs) with metadata.
+
+#### `GET /api/key-file?path=<name>`
+Read a whitelisted workspace file by logical name.
+
+#### `POST /api/key-file`
+Write to a whitelisted workspace file (read-only files like config are blocked).
+**Body:** `{ "path": "HEARTBEAT.md", "content": "..." }`
+**Limits:** 1MB max body, automatic `.bak` backup before overwrite.
+
 #### `GET /api/logs?service=<service>&lines=<N>`
 Fetch system logs.  
 **Params:** `service` (openclaw|agent-dashboard|tailscaled), `lines` (default 100)
@@ -383,7 +396,9 @@ Server-Sent Events stream of real-time messages.
 | `2` | Switch to Sessions |
 | `3` | Switch to Costs |
 | `4` | Switch to Rate Limits |
-| `5` | Switch to Live Feed |
+| `5` | Switch to Memory |
+| `6` | Switch to Files |
+| `7` | Switch to Live Feed |
 | `Space` | Pause/Resume Feed (when on Live Feed page) |
 | `/` | Focus search box |
 | `Esc` | Close modals and overlays |
