@@ -1568,7 +1568,7 @@ const server = http.createServer((req, res) => {
     
     try {
       const secret = base32Encode(crypto.randomBytes(20));
-      const otpauth_uri = `otpauth://totp/OpenClaw%20Dashboard?secret=${secret}&issuer=OpenClaw`;
+      const otpauth_uri = `otpauth://totp/OpenClaw:Dashboard?secret=${secret}&issuer=OpenClaw&algorithm=SHA1&digits=6&period=30`;
       pendingMfaSecrets.set(getClientIP(req), { secret, createdAt: Date.now() });
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ secret, otpauth_uri }));
