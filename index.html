@@ -2814,7 +2814,8 @@ async function setupMFA() {
     
     if (res.ok && data.secret) {
       document.getElementById('mfaSecretDisplay').textContent = data.secret;
-      document.getElementById('qrCodeContainer').innerHTML = generateQRCode(data.otpauth_uri);
+      const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=' + encodeURIComponent(data.otpauth_uri);
+      document.getElementById('qrCodeContainer').innerHTML = '<img src="' + qrUrl + '" width="256" height="256" alt="QR Code" style="border-radius:8px;">';
       document.getElementById('mfaDisabledView').style.display = 'none';
       document.getElementById('mfaSetupView').style.display = 'block';
     } else {
