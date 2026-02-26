@@ -188,6 +188,36 @@ class DashboardData {
     return m ? Number(m[1]) : null;
   }
 
+  _parseCpuUsageLine(cpuLine) {
+    const line = String(cpuLine || '');
+    if (!line) return { userPercent: null, systemPercent: null, idlePercent: null };
+
+    // macOS top sample: "CPU usage: 8.50% user, 7.00% sys, 84.48% idle"
+    const userMatch = line.match(/(\d+(?:\.\d+)?)%\s*user/i);
+    const systemMatch = line.match(/(\d+(?:\.\d+)?)%\s*(?:sys|system)/i);
+    const idleMatch = line.match(/(\d+(?:\.\d+)?)%\s*idle/i);
+
+    return {
+      userPercent: userMatch ? Number(userMatch[1]) : null,
+      systemPercent: systemMatch ? Number(systemMatch[1]) : null,
+      idlePercent: idleMatch ? Number(idleMatch[1]) : null,
+    };
+  }
+
+  _parseLoadAverages(uptimeRaw) {
+    const text = String(uptimeRaw || '');
+    if (!text) return { one: null, five: null, fifteen: null };
+
+    const m = text.match(/load averages?:\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i);
+    if (!m) return { one: null, five: null, fifteen: null };
+
+    return {
+      one: Number(m[1]),
+      five: Number(m[2]),
+      fifteen: Number(m[3]),
+    };
+  }
+
   _safeRequire(name) {
     try {
       // eslint-disable-next-line global-require, import/no-dynamic-require
@@ -254,8 +284,9 @@ class DashboardData {
 
     const diskUse = this._parsePercent(diskRaw);
     const cpuLine = cpuRaw.split('\n').find((line) => /CPU usage/i.test(line)) || '';
-    const idle = this._parsePercent(cpuLine.match(/(\d+(?:\.\d+)?)%\s*idle/i)?.[0]);
+    const cpuParsed = this._parseCpuUsageLine(cpuLine);
     const vmMemory = this._parseVmStatMemory(vmStatRaw);
+    const loadParsed = this._parseLoadAverages(uptimeRaw);
 
     return {
       ok: true,
@@ -266,11 +297,16 @@ class DashboardData {
       },
       cpu: {
         raw: cpuLine,
-        idlePercent: idle,
-        activePercent: idle === null ? null : Math.max(0, 100 - idle),
+        userPercent: cpuParsed.userPercent,
+        systemPercent: cpuParsed.systemPercent,
+        idlePercent: cpuParsed.idlePercent,
+        activePercent: cpuParsed.idlePercent === null ? null : Math.max(0, 100 - cpuParsed.idlePercent),
       },
       load: {
         raw: uptimeRaw,
+        oneMinute: loadParsed.one,
+        fiveMinute: loadParsed.five,
+        fifteenMinute: loadParsed.fifteen,
       },
       memory: vmMemory || {
         totalBytes: os.totalmem(),
