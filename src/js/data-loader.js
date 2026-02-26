@@ -207,6 +207,41 @@ class DashboardData {
     }
   }
 
+  _parseVmStatMemory(vmStatRaw) {
+    const text = String(vmStatRaw || '');
+    if (!text) return null;
+
+    const pageSizeMatch = text.match(/page size of\s+(\d+)\s+bytes/i);
+    const pageSize = Number(pageSizeMatch?.[1] || 4096);
+
+    const readPages = (labelRegex) => {
+      const m = text.match(labelRegex);
+      if (!m) return 0;
+      return Number(String(m[1]).replace(/\./g, '').trim()) || 0;
+    };
+
+    const freePages = readPages(/Pages free:\s*([\d.]+)/i);
+    const speculativePages = readPages(/Pages speculative:\s*([\d.]+)/i);
+    const activePages = readPages(/Pages active:\s*([\d.]+)/i);
+    const inactivePages = readPages(/Pages inactive:\s*([\d.]+)/i);
+    const wiredPages = readPages(/Pages wired down:\s*([\d.]+)/i);
+    const compressedPages = readPages(/Pages occupied by compressor:\s*([\d.]+)/i);
+
+    const totalPages = freePages + speculativePages + activePages + inactivePages + wiredPages + compressedPages;
+    if (!totalPages) return null;
+
+    const freeBytes = (freePages + speculativePages) * pageSize;
+    const usedBytes = totalPages * pageSize - freeBytes;
+
+    return {
+      pageSize,
+      raw: vmStatRaw,
+      totalBytes: totalPages * pageSize,
+      freeBytes,
+      usedBytes,
+    };
+  }
+
   _localHealthSnapshot() {
     // Node/macOS fallback when health API is unavailable.
     const os = this._safeRequire('os');
@@ -215,10 +250,12 @@ class DashboardData {
     const diskRaw = this._safeExec("df -h / | tail -1");
     const cpuRaw = this._safeExec("top -l 1 | head -n 10");
     const uptimeRaw = this._safeExec('uptime');
+    const vmStatRaw = this._safeExec('vm_stat');
 
     const diskUse = this._parsePercent(diskRaw);
     const cpuLine = cpuRaw.split('\n').find((line) => /CPU usage/i.test(line)) || '';
     const idle = this._parsePercent(cpuLine.match(/(\d+(?:\.\d+)?)%\s*idle/i)?.[0]);
+    const vmMemory = this._parseVmStatMemory(vmStatRaw);
 
     return {
       ok: true,
@@ -235,7 +272,7 @@ class DashboardData {
       load: {
         raw: uptimeRaw,
       },
-      memory: {
+      memory: vmMemory || {
         totalBytes: os.totalmem(),
         freeBytes: os.freemem(),
         usedBytes: os.totalmem() - os.freemem(),
@@ -317,6 +354,19 @@ class DashboardData {
     );
   }
 
+  _withTemporalAliases(payload) {
+    const phase = payload?.phase || 'unknown';
+    return {
+      ...payload,
+      // Backward compatibility for older UI/tests that read `state`.
+      state: phase,
+      overdue: phase === 'overdue',
+      imminent: phase === 'imminent',
+      degraded: phase === 'degraded',
+      running: phase === 'running',
+    };
+  }
+
   // Temporal model from architecture doc
   getCronTemporalState(job, now = Date.now()) {
     const state = job?.state || {};
@@ -327,52 +377,52 @@ class DashboardData {
     const consecutiveErrors = Number(state.consecutiveErrors || 0);
 
     if (!enabled) {
-      return { phase: 'disabled', displayStatus: 'disabled' };
+      return this._withTemporalAliases({ phase: 'disabled', displayStatus: 'disabled' });
     }
 
     if (state.runningAtMs) {
-      return {
+      return this._withTemporalAliases({
         phase: 'running',
         displayStatus: 'running',
         runningForMs: Math.max(now - Number(state.runningAtMs), 0),
-      };
+      });
     }
 
     if (!nextRun && !lastRun) {
-      return { phase: 'unknown', displayStatus: 'unknown' };
+      return this._withTemporalAliases({ phase: 'unknown', displayStatus: 'unknown' });
     }
 
     if (consecutiveErrors > 0 || lastStatus === 'error') {
-      return {
+      return this._withTemporalAliases({
         phase: 'degraded',
         displayStatus: 'needs-attention',
         consecutiveErrors,
         lastRunAgoMs: lastRun ? Math.max(now - lastRun, 0) : null,
-      };
+      });
+    }
+
+    if (nextRun && now > nextRun && lastRun < nextRun) {
+      return this._withTemporalAliases({
+        phase: 'overdue',
+        displayStatus: 'overdue',
+        overdueByMs: now - nextRun,
+      });
+    }
+
+    if (nextRun && now <= nextRun && (nextRun - now) < 60_000) {
+      return this._withTemporalAliases({ phase: 'imminent', displayStatus: 'running-soon' });
     }
 
     if (nextRun && now < nextRun && lastRun && lastRun < now) {
-      return {
+      return this._withTemporalAliases({
         phase: 'between-runs',
         displayStatus: 'healthy',
         nextRunInMs: Math.max(nextRun - now, 0),
         lastRunAgoMs: Math.max(now - lastRun, 0),
-      };
+      });
     }
 
-    if (nextRun && Math.abs(now - nextRun) < 60_000) {
-      return { phase: 'imminent', displayStatus: 'running-soon' };
-    }
-
-    if (nextRun && now > nextRun && lastRun < nextRun) {
-      return {
-        phase: 'overdue',
-        displayStatus: 'overdue',
-        overdueByMs: now - nextRun,
-      };
-    }
-
-    return { phase: 'scheduled', displayStatus: 'healthy' };
+    return this._withTemporalAliases({ phase: 'scheduled', displayStatus: 'healthy' });
   }
 
   async fetchAll() {
@@ -396,7 +446,11 @@ class DashboardData {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { DashboardData };
+  // Support both import styles:
+  //   const { DashboardData } = require('...')
+  //   const DashboardData = require('...')
+  module.exports = DashboardData;
+  module.exports.DashboardData = DashboardData;
 }
 if (typeof window !== 'undefined') {
   window.DashboardData = DashboardData;
