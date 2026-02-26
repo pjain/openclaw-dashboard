@@ -1773,6 +1773,12 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify(getCronJobs()));
       return;
     }
+    // Back-compat alias expected by some clients
+    if (req.url === '/api/cron') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(getCronJobs()));
+      return;
+    }
     if (req.url === '/api/git') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(getGitActivity()));
@@ -2053,6 +2059,15 @@ const server = http.createServer((req, res) => {
     if (req.url === '/api/health-history') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(healthHistory));
+      return;
+    }
+    // Back-compat alias expected by some clients
+    if (req.url === '/api/health') {
+      const latest = Array.isArray(healthHistory) && healthHistory.length
+        ? healthHistory[healthHistory.length - 1]
+        : null;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(latest || { status: 'unknown', timestamp: Date.now() }));
       return;
     }
     if (req.url === '/api/memory-files') {
