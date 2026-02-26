@@ -9,8 +9,11 @@ class DashboardData {
   constructor(options = {}) {
     this.options = {
       tasksUrl: '/api/tasks',
-      cronUrl: '/api/cron',
-      healthUrl: '/api/health',
+      tasksFallbackUrls: ['/tasks/data.json'],
+      cronUrl: '/api/crons',
+      cronFallbackUrls: ['/api/cron'],
+      healthUrl: '/api/health-history',
+      healthFallbackUrls: ['/api/health'],
       costsUrl: '/api/costs',
       cacheTtlMs: {
         tasks: 30_000,
@@ -100,6 +103,20 @@ class DashboardData {
     }, label);
   }
 
+  async _fetchJsonAny(urls = [], opts = {}, label = 'fetch') {
+    const tried = [];
+    for (const url of urls) {
+      if (!url) continue;
+      try {
+        return await this._fetchJson(url, opts, `${label} (${url})`);
+      } catch (error) {
+        tried.push(`${url}: ${error?.message || 'failed'}`);
+      }
+    }
+
+    throw new Error(`${label} failed on all endpoints: ${tried.join('; ')}`);
+  }
+
   async _cached(key, ttlMs, loader, fallbackValue) {
     const cached = this._getCache(key);
     if (cached !== null) return cached;
@@ -132,7 +149,17 @@ class DashboardData {
     return this._cached(
       'tasks',
       this.options.cacheTtlMs.tasks,
-      () => this._fetchJson(this.options.tasksUrl, {}, 'tasks'),
+      async () => {
+        const payload = await this._fetchJsonAny(
+          [this.options.tasksUrl, ...(this.options.tasksFallbackUrls || [])],
+          {},
+          'tasks'
+        );
+
+        if (Array.isArray(payload?.tasks)) return payload;
+        if (Array.isArray(payload)) return { tasks: payload };
+        return { tasks: [], ...payload };
+      },
       { tasks: [], error: 'tasks unavailable' }
     );
   }
@@ -141,14 +168,14 @@ class DashboardData {
     const payload = await this._cached(
       'cron',
       this.options.cacheTtlMs.cron,
-      () => this._fetchJson(this.options.cronUrl, {}, 'cron jobs'),
+      () => this._fetchJsonAny([this.options.cronUrl, ...(this.options.cronFallbackUrls || [])], {}, 'cron jobs'),
       { jobs: [], error: 'cron unavailable' }
     );
 
     const now = this._now();
-    const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+    const jobs = Array.isArray(payload?.jobs) ? payload.jobs : (Array.isArray(payload) ? payload : []);
     return {
-      ...payload,
+      ...(Array.isArray(payload) ? {} : payload),
       jobs: jobs.map((job) => ({
         ...job,
         temporalState: this.getCronTemporalState(job, now),
@@ -160,7 +187,7 @@ class DashboardData {
     return this._cached(
       'health',
       this.options.cacheTtlMs.health,
-      () => this._fetchJson(this.options.healthUrl, {}, 'health metrics'),
+      () => this._fetchJsonAny([this.options.healthUrl, ...(this.options.healthFallbackUrls || [])], {}, 'health metrics'),
       { ok: false, error: 'health metrics unavailable' }
     );
   }
