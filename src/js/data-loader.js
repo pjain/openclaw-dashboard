@@ -37,10 +37,11 @@ class DashboardData {
     return Date.now();
   }
 
-  _getCache(key) {
+  _getCache(key, { allowStale = false } = {}) {
     const entry = this.cache.get(key);
     if (!entry) return null;
     if (this._now() > entry.expiresAt) {
+      if (allowStale) return entry.value;
       this.cache.delete(key);
       return null;
     }
@@ -132,8 +133,8 @@ class DashboardData {
         return value;
       } catch (error) {
         // Graceful degradation: return stale cache if available
-        const stale = this.cache.get(key)?.value;
-        if (stale !== undefined) return stale;
+        const stale = this._getCache(key, { allowStale: true });
+        if (stale !== undefined && stale !== null) return stale;
         if (fallbackValue !== undefined) return fallbackValue;
         throw error;
       } finally {
