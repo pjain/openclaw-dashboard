@@ -183,11 +183,80 @@ class DashboardData {
     };
   }
 
+  _parsePercent(str) {
+    const m = String(str || '').match(/(\d+(?:\.\d+)?)%/);
+    return m ? Number(m[1]) : null;
+  }
+
+  _safeRequire(name) {
+    try {
+      // eslint-disable-next-line global-require, import/no-dynamic-require
+      return require(name);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  _safeExec(command) {
+    try {
+      const cp = this._safeRequire('child_process');
+      if (!cp?.execSync) return '';
+      return String(cp.execSync(command, { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim();
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  _localHealthSnapshot() {
+    // Node/macOS fallback when health API is unavailable.
+    const os = this._safeRequire('os');
+    if (!os) return null;
+
+    const diskRaw = this._safeExec("df -h / | tail -1");
+    const cpuRaw = this._safeExec("top -l 1 | head -n 10");
+    const uptimeRaw = this._safeExec('uptime');
+
+    const diskUse = this._parsePercent(diskRaw);
+    const cpuLine = cpuRaw.split('\n').find((line) => /CPU usage/i.test(line)) || '';
+    const idle = this._parsePercent(cpuLine.match(/(\d+(?:\.\d+)?)%\s*idle/i)?.[0]);
+
+    return {
+      ok: true,
+      source: 'local-shell-fallback',
+      disk: {
+        raw: diskRaw,
+        usedPercent: diskUse,
+      },
+      cpu: {
+        raw: cpuLine,
+        idlePercent: idle,
+        activePercent: idle === null ? null : Math.max(0, 100 - idle),
+      },
+      load: {
+        raw: uptimeRaw,
+      },
+      memory: {
+        totalBytes: os.totalmem(),
+        freeBytes: os.freemem(),
+        usedBytes: os.totalmem() - os.freemem(),
+      },
+      collectedAt: new Date().toISOString(),
+    };
+  }
+
   async fetchHealthMetrics() {
     return this._cached(
       'health',
       this.options.cacheTtlMs.health,
-      () => this._fetchJsonAny([this.options.healthUrl, ...(this.options.healthFallbackUrls || [])], {}, 'health metrics'),
+      async () => {
+        try {
+          return await this._fetchJsonAny([this.options.healthUrl, ...(this.options.healthFallbackUrls || [])], {}, 'health metrics');
+        } catch (_error) {
+          const local = this._localHealthSnapshot();
+          if (local) return local;
+          throw _error;
+        }
+      },
       { ok: false, error: 'health metrics unavailable' }
     );
   }
